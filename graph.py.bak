@@ -1,0 +1,96 @@
+"""
+Module 2/3 - LangGraph orchestration.
+
+Wires Profile -> Retrieval -> Recommendation -> Pathway Planner into a
+single graph. Q&A Agent is intentionally NOT part of this graph - it's
+a standalone, on-demand agent (see agents/qa_agent.py and api.py),
+since a student asking a quick question shouldn't have to go through
+full profiling first.
+"""
+from typing import TypedDict
+
+from langgraph.graph import StateGraph, END
+
+from src.agents import profile_agent, retrieval_agent, recommendation_agent, pathway_agent
+
+
+class AdvisorState(TypedDict):
+    student_text: str
+    profile: dict
+    retrieved: dict
+    recommendation: str
+    pathway: str
+
+
+def profile_node(state: AdvisorState) -> AdvisorState:
+    print("[Graph] Running Profile Agent...")
+    profile = profile_agent.build_profile(state["student_text"])
+    return {**state, "profile": profile}
+
+
+def retrieval_node(state: AdvisorState) -> AdvisorState:
+    print("[Graph] Running Retrieval Agent...")
+    retrieved = retrieval_agent.retrieve_for_profile(state["profile"])
+    return {**state, "retrieved": retrieved}
+
+
+def recommendation_node(state: AdvisorState) -> AdvisorState:
+    print("[Graph] Running Recommendation Agent...")
+    recommendation = recommendation_agent.generate_recommendation(state["profile"], state["retrieved"])
+    return {**state, "recommendation": recommendation}
+
+
+def pathway_node(state: AdvisorState) -> AdvisorState:
+    print("[Graph] Running Pathway Planner Agent...")
+    pathway = pathway_agent.generate_pathway(state["profile"], state["recommendation"])
+    return {**state, "pathway": pathway}
+
+
+def build_graph():
+    graph = StateGraph(AdvisorState)
+
+    graph.add_node("profile", profile_node)
+    graph.add_node("retrieval", retrieval_node)
+    graph.add_node("recommendation", recommendation_node)
+    graph.add_node("pathway", pathway_node)
+
+    graph.set_entry_point("profile")
+    graph.add_edge("profile", "retrieval")
+    graph.add_edge("retrieval", "recommendation")
+    graph.add_edge("recommendation", "pathway")
+    graph.add_edge("pathway", END)
+
+    return graph.compile()
+
+
+def run_advisor(student_text: str) -> AdvisorState:
+    """Convenience function to run the whole pipeline in one call."""
+    app = build_graph()
+    initial_state = {
+        "student_text": student_text,
+        "profile": {},
+        "retrieved": {},
+        "recommendation": "",
+        "pathway": "",
+    }
+    result = app.invoke(initial_state)
+    return result
+
+
+if __name__ == "__main__":
+    sample_input = (
+        "I'm a 12th standard student from Tamil Nadu, scored 88% in boards, "
+        "interested in computer science and robotics. My family can't afford "
+        "expensive private colleges so I need scholarship options too."
+    )
+    final_state = run_advisor(sample_input)
+
+    print("\n" + "=" * 60)
+    print("STRUCTURED PROFILE:")
+    print(final_state["profile"])
+    print("\n" + "=" * 60)
+    print("FINAL RECOMMENDATION:")
+    print(final_state["recommendation"])
+    print("\n" + "=" * 60)
+    print("PATHWAY ROADMAP:")
+    print(final_state["pathway"])

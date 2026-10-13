@@ -1,0 +1,1316 @@
+"""
+Module 4 - Streamlit frontend (education-themed, animated, authenticated).
+
+Calls the FastAPI backend (Modules 3-4) over HTTP - the backend must be
+running separately (uvicorn) for this to work. Every session is tagged to
+the logged-in user and saved to SQLite, so history persists and stays
+private per student.
+"""
+import streamlit as st
+import requests
+import re
+import uuid
+import json
+from datetime import date
+
+from src import auth
+from src import db
+import streamlit as st
+import streamlit.components.v1 as components
+
+auth.init_users_table()
+db.init_db()
+
+st.set_page_config(page_title="CareerCompass AI", page_icon="🎓", layout="wide")
+
+API_BASE = "http://127.0.0.1:8000"
+
+# ---------------------------------------------------------------------------
+# SMART EDUCATION DESIGN SYSTEM (CSS Styling)
+# ---------------------------------------------------------------------------
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap');
+
+/* General resets & Typography */
+html, body, [class*="css"] {
+    font-family: 'Inter', sans-serif;
+    background-color: #F8FAFC;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    font-family: 'Poppins', sans-serif;
+    color: #0F172A;
+    font-weight: 600;
+}
+
+/* Institutional Hero Banner */
+.hero {
+    background: linear-gradient(135deg, #0F172A 0%, #1E3A8A 50%, #1E40AF 100%);
+    border-radius: 16px;
+    padding: 40px 32px;
+    margin-bottom: 28px;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 10px 25px -5px rgba(30, 58, 138, 0.3);
+    border-left: 8px solid #F59E0B; /* Golden institutional accent line */
+}
+.hero h1 {
+    color: #FFFFFF;
+    font-size: 2.5rem;
+    margin: 0;
+    font-weight: 700;
+}
+.hero p {
+    color: #93C5FD;
+    font-size: 1.1rem;
+    margin-top: 8px;
+    margin-bottom: 0;
+}
+.floaty {
+    position: absolute;
+    font-size: 2.2rem;
+    opacity: 0.15;
+    animation: floatUpDown 6s ease-in-out infinite;
+}
+.floaty.f1 { top: 20px;  right: 120px; animation-delay: 0s; }
+.floaty.f2 { top: 70px;  right: 40px;  animation-delay: 1.5s; font-size: 1.8rem; }
+.floaty.f3 { bottom: 15px; right: 180px; animation-delay: 3s; font-size: 1.6rem; }
+@keyframes floatUpDown {
+    0%, 100% { transform: translateY(0px); }
+    50%      { transform: translateY(-15px); }
+}
+
+/* Premium Login/Signup Centered Cards */
+.auth-container {
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: 16px;
+    padding: 32px;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05);
+    max-width: 440px;
+    margin: 40px auto;
+}
+.auth-header {
+    text-align: center;
+    margin-bottom: 24px;
+}
+.auth-logo {
+    font-size: 3.5rem;
+    margin-bottom: 12px;
+}
+.auth-title {
+    color: #1E3A8A;
+    font-size: 1.8rem;
+    margin: 0;
+    font-weight: 700;
+    font-family: 'Poppins', sans-serif;
+}
+.auth-subtitle {
+    color: #64748B;
+    font-size: 0.95rem;
+    margin-top: 6px;
+    margin-bottom: 0;
+    line-height: 1.4;
+}
+
+/* Sidebar Navigation overrides (Make rectangular with rounded corners) */
+section[data-testid="stSidebar"] {
+    background-color: #F1F5F9 !important;
+    border-right: 1px solid #E2E8F0;
+}
+section[data-testid="stSidebar"] [data-testid="stWidgetLabel"] {
+    display: none !important;
+}
+section[data-testid="stSidebar"] .stRadio > div {
+    gap: 8px;
+    padding: 0;
+}
+section[data-testid="stSidebar"] label[data-baseweb="radio"] {
+    background: #FFFFFF !important;
+    border: 1px solid #E2E8F0 !important;
+    border-radius: 8px !important;
+    padding: 12px 16px !important;
+    margin-bottom: 4px !important;
+    width: 100% !important;
+    min-height: 48px;
+    display: flex;
+    align-items: center;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+    cursor: pointer;
+}
+section[data-testid="stSidebar"] label[data-baseweb="radio"]:hover {
+    border-color: #1E3A8A !important;
+    background: #F0F5FF !important;
+    transform: translateY(-1px);
+}
+section[data-testid="stSidebar"] label[data-baseweb="radio"][data-checked="true"] {
+    background-color: #1E3A8A !important;
+    border-color: #1E3A8A !important;
+    box-shadow: 0 4px 12px rgba(30, 58, 138, 0.15) !important;
+}
+section[data-testid="stSidebar"] label[data-baseweb="radio"][data-checked="true"] * {
+    color: #FFFFFF !important;
+    font-weight: 600 !important;
+}
+section[data-testid="stSidebar"] label[data-baseweb="radio"] > div:first-child {
+    display: none !important; /* Hide circular radio button */
+}
+
+/* Custom styled inputs */
+.stTextInput > div > div > input, .stTextArea > div > div > textarea {
+    border-radius: 8px !important;
+    border: 1px solid #CBD5E1 !important;
+}
+.stTextInput > div > div > input:focus, .stTextArea > div > div > textarea:focus {
+    border-color: #1E3A8A !important;
+    box-shadow: 0 0 0 2px rgba(30, 58, 138, 0.2) !important;
+}
+
+/* Styled Checkbox Card (Schedule Items) */
+div[data-testid="stCheckbox"] {
+    background-color: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: 12px;
+    padding: 14px 18px;
+    margin-bottom: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+    transition: all 0.2s ease;
+}
+div[data-testid="stCheckbox"]:hover {
+    border-color: #CBD5E1;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+}
+
+/* Badges and tags */
+.checkbox-meta {
+    margin-left: 28px;
+    margin-top: -8px;
+    margin-bottom: 16px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.cit-tag {
+    background-color: #FEF3C7; /* Amber 100 */
+    color: #92400E; /* Amber 800 */
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 9999px;
+    border: 1px solid #FDE68A;
+    display: inline-flex;
+    align-items: center;
+}
+.link-tag {
+    background-color: #DBEAFE; /* Blue 100 */
+    color: #1E40AF; /* Blue 800 */
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 9999px;
+    border: 1px solid #BFDBFE;
+    display: inline-flex;
+    align-items: center;
+}
+
+/* Recommendation Cards styling */
+.edu-card {
+    background: #FFFFFF;
+    border-radius: 16px;
+    border: 1px solid #E2E8F0;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+    margin-bottom: 24px;
+    overflow: hidden;
+    transition: all 0.2s ease;
+}
+.edu-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 15px -3px rgba(30, 58, 138, 0.08);
+}
+.edu-card-header {
+    background: #1E3A8A; /* Navy */
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid #E2E8F0;
+}
+.edu-card-icon {
+    font-size: 1.4rem;
+    margin-right: 12px;
+}
+.edu-card-title {
+    color: #FFFFFF;
+    font-weight: 600;
+    font-size: 1.1rem;
+    font-family: 'Poppins', sans-serif;
+}
+.edu-card-body {
+    padding: 20px;
+}
+.edu-item {
+    padding-bottom: 14px;
+    margin-bottom: 14px;
+    border-bottom: 1px dashed #E2E8F0;
+}
+.edu-item:last-child {
+    padding-bottom: 0;
+    margin-bottom: 0;
+    border-bottom: none;
+}
+.edu-item-text {
+    font-size: 0.95rem;
+    color: #334155;
+    line-height: 1.5;
+    margin: 0 0 6px 0;
+}
+.edu-item-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+/* Executive Dashboard grid */
+.dashboard-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-bottom: 24px;
+}
+.metric-card {
+    flex: 1 1 200px;
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: 12px;
+    padding: 16px;
+    text-align: center;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+}
+.metric-value {
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: #1E3A8A;
+    font-family: 'Poppins', sans-serif;
+}
+.metric-value.completed {
+    color: #059669; /* Green */
+}
+.metric-value.pending {
+    color: #D97706; /* Amber */
+}
+.metric-value.progress-pct {
+    color: #2563EB; /* Blue */
+}
+.metric-label {
+    font-size: 0.8rem;
+    color: #64748B;
+    margin-top: 4px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Profile Card Dashboard */
+.profile-dashboard {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 20px;
+}
+.profile-pill {
+    background-color: #E2E8F0;
+    color: #334155;
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Timeline Cards */
+.timeline-card {
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: 12px;
+    padding: 18px;
+    margin-bottom: 16px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.03);
+    position: relative;
+}
+.timeline-card.immediate { border-left: 5px solid #10B981 !important; }
+.timeline-card.short-term { border-left: 5px solid #3B82F6 !important; }
+.timeline-card.medium-term { border-left: 5px solid #8B5CF6 !important; }
+.timeline-card.long-term { border-left: 5px solid #F59E0B !important; }
+</style>
+""", unsafe_allow_html=True)
+
+
+def render_hero():
+    st.markdown("""
+    <div class="hero">
+        <span class="floaty f1">🎓</span>
+        <span class="floaty f2">📚</span>
+        <span class="floaty f3">📜</span>
+        <h1>CareerCompass AI</h1>
+        <p>Your institutional guide for careers, courses, scholarships, and academic pathways</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# PARSERS: Recommendation, Roadmap, Schedule
+# ---------------------------------------------------------------------------
+def parse_recommendation(text: str) -> dict:
+    """Splits recommendation text into the 5 CareerCompass sections."""
+
+    sections = {
+        "careers": "",
+        "courses": "",
+        "scholarships": "",
+        "schemes": "",
+        "next_steps": ""
+    }
+
+    patterns = [
+        ("careers", r"Suggested\s+Career\s+Pathways"),
+        ("scholarships", r"Eligible\s+Scholarships"),
+        ("courses", r"Recommended\s+Institutions\s*&?\s*Courses"),
+        ("schemes", r"Welfare\s*&?\s*Govt\s+Schemes"),
+        ("next_steps", r"Next\s+Steps\s*&?\s*Action\s+Points"),
+    ]
+
+    positions = []
+
+    for key, pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            positions.append((key, match.start(), match.end()))
+
+    positions.sort(key=lambda x: x[1])
+
+    if not positions:
+        return sections
+
+    for i, (key, start, end) in enumerate(positions):
+        next_start = (
+            positions[i + 1][1]
+            if i + 1 < len(positions)
+            else len(text)
+        )
+
+    return sections
+
+
+def render_section_card(section_text: str, card_title: str, icon: str):
+    """Formats AI section text into clean HTML cards."""
+
+    if not section_text.strip() or "no relevant documents found" in section_text.lower():
+        st.info(f"No {card_title.lower()} available in context.")
+        return
+
+    # Clean up malformed markdown artifacts
+    text = re.sub(r"```(?:html|markdown)?", "", section_text, flags=re.IGNORECASE)
+    text = text.replace("```", "").strip()
+    text = text.replace("### **", "### ").replace("**###", "###")
+    text = re.sub(r"\\+\*", "*", text) # replace double-escaped asterisks
+
+    # Remove unwanted closing/opening wrapper divs from AI output
+    text = re.sub(r"</?div[^>]*>", "", text, flags=re.IGNORECASE)
+
+    # Convert HTML paragraph content into plain text
+    text = re.sub(r"<p[^>]*>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"</p>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"<span[^>]*>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"</span>", "", text, flags=re.IGNORECASE)
+
+    lines = text.split("\n")
+    items = []
+
+    for line in lines:
+        line = line.strip()
+
+        if not line:
+            continue
+
+        # Ignore useless markdown headings
+        if line in ["###", "##", "#"]:
+            continue
+
+        # Remove list markers
+        line = re.sub(r"^[-*•]\s+", "", line)
+        line = re.sub(r"^\d+\.\s+", "", line)
+
+        # Find citations
+        citations = re.findall(
+            r"\((?:source|citation):\s*([^)]+)\)",
+            line,
+            re.IGNORECASE
+        )
+
+        clean_text = re.sub(
+            r"\((?:source|citation):\s*[^)]+\)",
+            "",
+            line,
+            flags=re.IGNORECASE
+        ).strip()
+
+        # Find linked resources
+        linked = []
+
+        linked_match = re.search(
+            r"\[(?:linked|resources):\s*([^]]+)\]",
+            clean_text,
+            re.IGNORECASE
+        )
+
+        if linked_match:
+            linked = [
+                r.strip()
+                for r in linked_match.group(1).split(",")
+            ]
+
+            clean_text = re.sub(
+                r"\[(?:linked|resources):\s*[^]]+\]",
+                "",
+                clean_text,
+                flags=re.IGNORECASE
+            ).strip()
+
+        # Remove remaining HTML tags
+        clean_text = re.sub(r"<[^>]+>", "", clean_text).strip()
+
+        if clean_text:
+            items.append({
+                "text": clean_text,
+                "citations": citations,
+                "linked": linked
+            })
+
+    if not items:
+        st.markdown(text, unsafe_allow_html=True)
+        return
+
+    html = f"""
+    <div class="edu-card">
+        <div class="edu-card-header">
+            <span class="edu-card-icon">{icon}</span>
+            <span class="edu-card-title">{card_title}</span>
+        </div>
+        <div class="edu-card-body">
+    """
+
+    for item in items:
+
+        citation_html = ""
+
+        for cit in item["citations"]:
+            citation_html += (
+                f'<span class="cit-tag">📄 {cit}</span>'
+            )
+
+        for link in item["linked"]:
+            citation_html += (
+                f'<span class="link-tag">🔗 {link}</span>'
+            )
+
+        # Convert **bold** into HTML
+        item_text = re.sub(
+            r"\*\*(.*?)\*\*",
+            r"<strong>\1</strong>",
+            item["text"]
+        )
+
+        html += f"""
+        <div class="edu-item">
+            <p class="edu-item-text">{item_text}</p>
+            <div class="edu-item-meta">
+                {citation_html}
+            </div>
+        </div>
+        """
+
+    html += """
+        </div>
+    </div>
+    """
+
+    st.markdown(html, unsafe_allow_html=True)
+
+def parse_pathway_to_milestones(pathway_text: str) -> list[dict]:
+    """Parses Pathway Planner text into structured milestones with Action, Why it matters, and Skills."""
+    phases_patterns = [
+        ("Immediate (0-1 month)", r"([#]+\s*[-*•]?\s*Immediate[^\n]*)"),
+        ("Short-term (1-6 months)", r"([#]+\s*[-*•]?\s*Short-term[^\n]*)"),
+        ("Medium-term (6-18 months)", r"([#]+\s*[-*•]?\s*Medium-term[^\n]*)"),
+        ("Long-term (18+ months)", r"([#]+\s*[-*•]?\s*Long-term[^\n]*)"),
+    ]
+    
+    positions = []
+    for name, pattern in phases_patterns:
+        match = re.search(pattern, pathway_text, re.IGNORECASE)
+        if match:
+            positions.append((name, match.start(), match.end()))
+            
+    positions.sort(key=lambda x: x[1])
+    
+    milestones = []
+    if not positions:
+        return milestones
+        
+    for i in range(len(positions)):
+        name, start, end = positions[i]
+        next_start = positions[i+1][1] if i + 1 < len(positions) else len(pathway_text)
+        phase_content = pathway_text[end:next_start].strip()
+        
+        lines = phase_content.split("\n")
+        items = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("- ") or line.startswith("* ") or re.match(r"^\d+\.\s+", line):
+                line = re.sub(r"^[-*\d\.\s]+", "", line).strip()
+                
+            # Skip if it is not a bullet-point item
+            if not line or line.lower().startswith("most urgent"):
+                continue
+                
+            citations = re.findall(r"\((?:source|citation):\s*([^)]+)\)", line, re.IGNORECASE)
+            clean_text = re.sub(r"\((?:source|citation):\s*[^)]+\)", "", line, re.IGNORECASE).strip()
+            
+            linked_resources = []
+            linked_match = re.search(r"\[(?:linked|resources):\s*([^]]+)\]", clean_text, re.IGNORECASE)
+            if linked_match:
+                linked_resources = [r.strip() for r in linked_match.group(1).split(",")]
+                clean_text = re.sub(r"\[(?:linked|resources):\s*[^]]+\]", "", clean_text, re.IGNORECASE).strip()
+                
+            # Try to split structured text: Action | Why it matters | Skills/Opportunity
+            action = clean_text
+            why_it_matters = ""
+            skills_opportunity = ""
+            
+            if "|" in clean_text:
+                parts = clean_text.split("|")
+                for part in parts:
+                    part_stripped = part.strip()
+                    if part_stripped.lower().startswith("action:"):
+                        action = part_stripped[7:].strip()
+                    elif part_stripped.lower().startswith("why it matters:"):
+                        why_it_matters = part_stripped[15:].strip()
+                    elif part_stripped.lower().startswith("skills/opportunity:"):
+                        skills_opportunity = part_stripped[19:].strip()
+                    elif part_stripped.lower().startswith("skills:"):
+                        skills_opportunity = part_stripped[7:].strip()
+                    else:
+                        if not why_it_matters and not part_stripped.lower().startswith("action:"):
+                            why_it_matters = part_stripped
+            
+            action = action.replace("### **", "").replace("**", "").replace("\\*\\*", "").strip()
+            why_it_matters = why_it_matters.replace("### **", "").replace("**", "").replace("\\*\\*", "").strip()
+            skills_opportunity = skills_opportunity.replace("### **", "").replace("**", "").replace("\\*\\*", "").strip()
+            
+            items.append({
+                "id": str(uuid.uuid4())[:8],
+                "action": action,
+                "text": clean_text,
+                "why_it_matters": why_it_matters,
+                "skills_opportunity": skills_opportunity,
+                "citations": citations,
+                "linked_resources": linked_resources,
+                "completed": False
+            })
+            
+        milestones.append({
+            "phase": name,
+            "items": items
+        })
+        
+    return milestones
+
+
+def parse_schedule_table(schedule_text: str) -> list[dict]:
+    """Parses markdown table of schedule from schedule agent."""
+    lines = schedule_text.split("\n")
+    items = []
+    for line in lines:
+        line = line.strip()
+        if "|" not in line or "Month" in line or "---" in line:
+            continue
+            
+        parts = [p.strip() for p in line.split("|")]
+        if parts[0] == "":
+            parts = parts[1:]
+        if parts and parts[-1] == "":
+            parts = parts[:-1]
+            
+        if len(parts) >= 3:
+            month = parts[0]
+            action = parts[1]
+            priority = parts[2]
+            
+            citations = re.findall(r"\((?:source|citation):\s*([^)]+)\)", action, re.IGNORECASE)
+            clean_action = re.sub(r"\((?:source|citation):\s*[^)]+\)", "", action, re.IGNORECASE).strip()
+            
+            linked_resources = []
+            linked_match = re.search(r"\[(?:linked|resources):\s*([^]]+)\]", clean_action, re.IGNORECASE)
+            if linked_match:
+                linked_resources = [r.strip() for r in linked_match.group(1).split(",")]
+                clean_action = re.sub(r"\[(?:linked|resources):\s*[^]]+\]", "", clean_action, re.IGNORECASE).strip()
+                
+            items.append({
+                "id": str(uuid.uuid4())[:8],
+                "month": month,
+                "action": clean_action,
+                "priority": priority,
+                "citations": citations,
+                "linked_resources": linked_resources,
+                "completed": False
+            })
+    return items
+
+
+def render_gantt_chart(schedule_items: list[dict]):
+    """Renders a custom HTML Gantt table for schedule items."""
+    if not schedule_items:
+        return ""
+        
+    months = []
+    for item in schedule_items:
+        if item["month"] not in months:
+            months.append(item["month"])
+            
+    if not months:
+        return ""
+        
+    html = """
+    <div style="overflow-x: auto; width: 100%; border: 1px solid #E2E8F0; border-radius: 12px; background: white; padding: 16px; margin-bottom: 24px;">
+        <table style="width: 100%; border-collapse: collapse; font-family: 'Inter', sans-serif; font-size: 0.85rem;">
+            <thead>
+                <tr style="border-bottom: 2px solid #E2E8F0; background-color: #F8FAFC;">
+                    <th style="text-align: left; padding: 12px; color: #1E3A8A; font-weight: 600;">Action Item</th>
+    """
+    for m in months:
+        html += f'<th style="text-align: center; padding: 12px; color: #1E3A8A; font-weight: 600; min-width: 100px;">{m}</th>'
+    html += """
+                </tr>
+            </thead>
+            <tbody>
+    """
+    
+    for item in schedule_items:
+        if item["priority"].lower() == "high":
+            bar_color = "#FEE2E2"
+            bar_border = "#FCA5A5"
+            bar_text = "#991B1B"
+        elif item["priority"].lower() == "medium":
+            bar_color = "#FEF3C7"
+            bar_border = "#FDE68A"
+            bar_text = "#92400E"
+        else:
+            bar_color = "#D1FAE5"
+            bar_border = "#6EE7B7"
+            bar_text = "#065F46"
+            
+        if item["completed"]:
+            bar_color = "#E2E8F0"
+            bar_border = "#CBD5E1"
+            bar_text = "#475569"
+            
+        html += f"""
+        <tr style="border-bottom: 1px solid #F1F5F9;">
+            <td style="padding: 12px; text-align: left; font-weight: 500; color: #334155;">
+                {item["action"]}
+                {" ✅" if item["completed"] else ""}
+            </td>
+        """
+        for m in months:
+            if item["month"] == m:
+                html += f"""
+                <td style="padding: 6px; text-align: center;">
+                    <div style="background-color: {bar_color}; border: 1px solid {bar_border}; color: {bar_text}; padding: 6px 10px; border-radius: 6px; font-weight: 600; font-size: 0.72rem; text-transform: uppercase;">
+                        {item["priority"]}
+                    </div>
+                </td>
+                """
+            else:
+                html += '<td style="padding: 6px; text-align: center; color: #CBD5E1;">•</td>'
+        html += "</tr>"
+        
+    html += """
+            </tbody>
+        </table>
+    </div>
+    """
+    return html
+
+
+def get_motivational_message(profile: dict) -> str:
+    """Returns a tailored motivational quote based on the student's education stage/year."""
+    year = str(profile.get("current_year", "")).lower()
+    stage = str(profile.get("education_stage", "")).lower()
+    
+    if "3rd" in year or "third" in year:
+        return "💡 **Opportunity Awaits:** You already have a foundation. Now turn your skills into projects, experience, and opportunities."
+    elif "final" in year or "4th" in year or "fourth" in year:
+        return "🚀 **Action Time:** Your next opportunity starts with the work you do today."
+    elif "1st" in year or "first" in year:
+        return "🌱 **Adapt & Explore:** Adapting to college takes time. Focus on programming fundamentals, mini-projects, and foundational skills."
+    elif "2nd" in year or "second" in year:
+        return "✨ **Consistency Is Key:** Small skills built consistently become big opportunities. Start working on small projects."
+    elif "12th" in year or "school" in stage:
+        return "🧭 **Your Journey Begins:** Your career doesn't need to be figured out today. Just take the next right step."
+    else:
+        return "✨ **Take the Next Step:** Your roadmap is a direction, not a deadline."
+
+
+# ---------------------------------------------------------------------------
+# LOGIN GATEWAY (Centered Authentication Card)
+# ---------------------------------------------------------------------------
+if "username" not in st.session_state:
+    col_left, col_center, col_right = st.columns([1, 1.8, 1])
+    with col_center:
+        st.markdown("""
+        <div class="auth-container">
+            <div class="auth-header">
+                <div class="auth-logo">🎓</div>
+                <h1 class="auth-title">CareerCompass AI</h1>
+                <p class="auth-subtitle">AI Career & Education Advisor for Indian Students</p>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        login_tab, signup_tab = st.tabs(["🔑 Login", "🆕 Sign Up"])
+        
+        with login_tab:
+            st.markdown("<p style='color: #64748B; font-size: 0.9rem; text-align: center; margin-bottom: 16px;'>Welcome back! Enter your details to access your roadmap.</p>", unsafe_allow_html=True)
+            login_user = st.text_input("Username", key="login_user")
+            login_pass = st.text_input("Password", type="password", key="login_pass")
+            if st.button("Login", use_container_width=True, type="primary"):
+                if auth.verify_user(login_user, login_pass):
+                    st.session_state["username"] = login_user
+                    st.rerun()
+                else:
+                    st.error("Incorrect username or password.")
+                    
+        with signup_tab:
+            st.markdown("<p style='color: #64748B; font-size: 0.9rem; text-align: center; margin-bottom: 16px;'>Create a new student account to save your progress.</p>", unsafe_allow_html=True)
+            new_user = st.text_input("Choose a username", key="signup_user")
+            new_pass = st.text_input("Choose a password", type="password", key="signup_pass")
+            if st.button("Sign Up", use_container_width=True, type="primary"):
+                if not new_user.strip() or not new_pass.strip():
+                    st.warning("Username and password can't be empty.")
+                elif auth.create_user(new_user, new_pass):
+                    st.success("Account created! Please log in from the Login tab.")
+                else:
+                    st.error("That username is already taken.")
+                    
+    st.stop()
+
+# ---------------------------------------------------------------------------
+# MAIN APPLICATION INTERFACE
+# ---------------------------------------------------------------------------
+render_hero()
+
+# Sidebar Setup
+with st.sidebar:
+    st.markdown(f"### 👋 Welcome, {st.session_state['username']}")
+    if st.button("Logout", use_container_width=True):
+        del st.session_state["username"]
+        st.session_state.pop("loaded_session", None)
+        st.rerun()
+        
+    st.markdown("---")
+    st.markdown("### 🧭 Navigation")
+    
+    page = st.radio(
+        "Go to",
+        [
+            "🏠 Dashboard",
+            "👤 Profile",
+            "🎯 Career Recommendations",
+            "🗺️ Roadmap",
+            "📅 Academic Schedule",
+            "❓ Quick Q&A",
+            "📚 Past Sessions"
+        ],
+        label_visibility="collapsed"
+    )
+    
+    st.markdown("---")
+    if st.session_state.get("loaded_session"):
+        session = st.session_state["loaded_session"]
+        st.success(f"📂 Active Session:\n{session['created_at'][:16]}")
+        if st.button("🆕 Start New Session", use_container_width=True):
+            st.session_state.pop("loaded_session", None)
+            st.rerun()
+
+# Helpers for database triggers
+def update_milestones_db(session_id, milestones):
+    db.update_session_milestones(session_id, json.dumps(milestones))
+    st.session_state["loaded_session"]["milestones_json"] = json.dumps(milestones)
+
+def update_schedule_db(session_id, schedule_items):
+    db.update_session_schedule_json(session_id, json.dumps(schedule_items))
+    st.session_state["loaded_session"]["schedule_json"] = json.dumps(schedule_items)
+
+
+# PAGE 1: Dashboard
+if page == "🏠 Dashboard":
+    if not st.session_state.get("loaded_session"):
+        st.markdown("### 🏠 Dashboard")
+        st.markdown(f"""
+        <div style="background-color: #EFF6FF; border-left: 5px solid #1E3A8A; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+            <p style="margin: 0; color: #1E3A8A; font-size: 0.95rem; font-style: italic;">
+                🧭 <strong>Your Journey Begins:</strong> Your career doesn't need to be figured out today. Just take the next right step.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        st.markdown("Tell us about your educational background, current stage/year, stream preferences, financial constraints, and targets:")
+        
+        student_text = st.text_area(
+            "Describe yourself:",
+            height=150,
+            placeholder=(
+                "e.g., I am a 3rd-year Computer Science student from Tamil Nadu with 8.2 CGPA and knowledge of Python and SQL."
+            )
+        )
+        
+        if st.button("✨ Generate My Advisory Plan", type="primary", use_container_width=True):
+            if not student_text.strip():
+                st.warning("Please describe your academic background first.")
+            else:
+                steps = [
+                    "🧑‍🎓 Structuring student profile...",
+                    "🔎 Querying colleges, courses, scholarships, and welfare schemes...",
+                    "💡 Generating customized institutional advice...",
+                    "🗺️ Drafting phased milestone actions...",
+                ]
+                
+                progress_placeholder = st.empty()
+                progress_bar = st.progress(0)
+                
+                for i, step_desc in enumerate(steps):
+                    progress_placeholder.markdown(f"**{step_desc}**")
+                    progress_bar.progress(int((i + 1) / len(steps) * 100))
+                    
+                try:
+                    resp = requests.post(
+                        f"{API_BASE}/advise",
+                        json={"student_text": student_text},
+                        timeout=120,
+                    )
+                    resp.raise_for_status()
+                    result = resp.json()
+                    
+                    milestones = parse_pathway_to_milestones(result["pathway"])
+                    milestones_json = json.dumps(milestones) if milestones else None
+                    
+                    session_id = db.save_session(
+                        st.session_state["username"],
+                        student_text,
+                        result["profile"],
+                        result["recommendation"],
+                        result["pathway"],
+                        milestones_json
+                    )
+                    
+                    st.session_state["loaded_session"] = db.get_session(session_id)
+                    st.rerun()
+                    
+                except requests.exceptions.ConnectionError:
+                    progress_bar.empty()
+                    progress_placeholder.empty()
+                    st.error("Cannot reach API server. Please confirm uvicorn is running on port 8000.")
+                except Exception as e:
+                    progress_bar.empty()
+                    progress_placeholder.empty()
+                    st.error(f"Execution error: {e}")
+    else:
+        session = st.session_state["loaded_session"]
+        st.markdown("### 🏠 Dashboard")
+        
+        st.markdown(f"""
+        <div style="background: white; border: 1px solid #E2E8F0; border-radius: 12px; padding: 20px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.02);">
+            <h4 style="margin: 0 0 8px 0; color: #1E3A8A;">📂 Active Advisory Plan</h4>
+            <p style="margin: 0; color: #475569; font-size: 0.9rem;">Created on: <strong>{session['created_at'][:16]}</strong></p>
+            <p style="margin: 10px 0 0 0; font-size: 0.95rem; color: #334155; font-style: italic;">"{session['student_text']}"</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown(f"""
+        <div style="background-color: #EFF6FF; border-left: 5px solid #1E3A8A; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+            <p style="margin: 0; color: #1E3A8A; font-size: 0.95rem;">
+                {get_motivational_message(session['profile'])}
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("#### 🎯 Next Focus Preview")
+        milestones = []
+        if session.get("milestones_json"):
+            milestones = json.loads(session["milestones_json"])
+        else:
+            milestones = parse_pathway_to_milestones(session["pathway"])
+            
+        if milestones:
+            first_phase = milestones[0]
+            st.markdown(f"**Phase: {first_phase['phase']}**")
+            for item in first_phase["items"][:3]:
+                action = item.get("action", item.get("text", ""))
+                st.markdown(f"- {action}")
+            if len(first_phase["items"]) > 3:
+                st.markdown(f"*and {len(first_phase['items']) - 3} more items. View the full timeline under the 🗺️ Roadmap tab.*")
+        else:
+            st.markdown("*No roadmap items found. Go to the 🗺️ Roadmap tab to generate them.*")
+            
+        st.markdown("---")
+        if st.button("🆕 Start New Session / Create New Plan", use_container_width=True):
+            st.session_state.pop("loaded_session", None)
+            st.rerun()
+
+
+# PAGE 2: Profile
+elif page == "👤 Profile":
+    if not st.session_state.get("loaded_session"):
+        st.info("💡 Please create or select an advisory plan on the Dashboard first.")
+    else:
+        session = st.session_state["loaded_session"]
+        st.markdown("### 👤 Student Profile")
+        p = session["profile"]
+        
+        profile_html = f"""
+        <div style="background: white; border: 1px solid #E2E8F0; border-radius: 12px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.02); margin-bottom: 24px;">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px;">
+                <div style="background: #F8FAFC; padding: 12px 16px; border-radius: 8px; border: 1px solid #F1F5F9;">
+                    <div style="font-size: 0.8rem; color: #64748B; text-transform: uppercase; font-weight: 600;">Stream</div>
+                    <div style="font-size: 1.1rem; color: #0F172A; font-weight: 600; margin-top: 4px;">📚 {p.get('stream', 'Unknown').capitalize()}</div>
+                </div>
+                <div style="background: #F8FAFC; padding: 12px 16px; border-radius: 8px; border: 1px solid #F1F5F9;">
+                    <div style="font-size: 0.8rem; color: #64748B; text-transform: uppercase; font-weight: 600;">Education Stage</div>
+                    <div style="font-size: 1.1rem; color: #0F172A; font-weight: 600; margin-top: 4px;">🏫 {p.get('education_stage', 'Unknown').replace('_', ' ').capitalize()}</div>
+                </div>
+                <div style="background: #F8FAFC; padding: 12px 16px; border-radius: 8px; border: 1px solid #F1F5F9;">
+                    <div style="font-size: 0.8rem; color: #64748B; text-transform: uppercase; font-weight: 600;">Current Year</div>
+                    <div style="font-size: 1.1rem; color: #0F172A; font-weight: 600; margin-top: 4px;">⏳ {p.get('current_year', 'Unknown').capitalize()}</div>
+                </div>
+                <div style="background: #F8FAFC; padding: 12px 16px; border-radius: 8px; border: 1px solid #F1F5F9;">
+                    <div style="font-size: 0.8rem; color: #64748B; text-transform: uppercase; font-weight: 600;">Board Score / CGPA</div>
+                    <div style="font-size: 1.1rem; color: #0F172A; font-weight: 600; margin-top: 4px;">🏛️ {p.get('board_percentage', 'N/A')}%</div>
+                </div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px;">
+                <div style="background: #F8FAFC; padding: 12px 16px; border-radius: 8px; border: 1px solid #F1F5F9;">
+                    <div style="font-size: 0.8rem; color: #64748B; text-transform: uppercase; font-weight: 600;">State</div>
+                    <div style="font-size: 1.1rem; color: #0F172A; font-weight: 600; margin-top: 4px;">📍 {p.get('state', 'Unknown').capitalize()}</div>
+                </div>
+                <div style="background: #F8FAFC; padding: 12px 16px; border-radius: 8px; border: 1px solid #F1F5F9;">
+                    <div style="font-size: 0.8rem; color: #64748B; text-transform: uppercase; font-weight: 600;">Category</div>
+                    <div style="font-size: 1.1rem; color: #0F172A; font-weight: 600; margin-top: 4px;">👥 {p.get('category', 'Unknown').upper()}</div>
+                </div>
+            </div>
+            <div style="margin-top: 16px;">
+                <div style="font-size: 0.8rem; color: #64748B; text-transform: uppercase; font-weight: 600;">Interests</div>
+                <div style="font-size: 1rem; color: #334155; margin-top: 4px;">
+                    {", ".join(p.get('interests', [])) if p.get('interests') else "None mentioned"}
+                </div>
+            </div>
+            <div style="margin-top: 16px;">
+                <div style="font-size: 0.8rem; color: #64748B; text-transform: uppercase; font-weight: 600;">Constraints</div>
+                <div style="font-size: 1rem; color: #334155; margin-top: 4px;">⚠️ {p.get('constraints', 'None')}</div>
+            </div>
+            <div style="margin-top: 16px;">
+                <div style="font-size: 0.8rem; color: #64748B; text-transform: uppercase; font-weight: 600;">Goal</div>
+                <div style="font-size: 1rem; color: #334155; margin-top: 4px;">🎯 {p.get('goal', 'General advisory')}</div>
+            </div>
+        </div>
+        """
+        st.markdown(profile_html, unsafe_allow_html=True)
+
+
+# PAGE 3: Career Recommendations
+elif page == "🎯 Career Recommendations":
+    if not st.session_state.get("loaded_session"):
+        st.info("💡 Please create or select an advisory plan in the **Dashboard** first.")
+    else:
+        session = st.session_state["loaded_session"]
+        st.markdown("### 🎯 Advisory Recommendations")
+        
+        rec_text = session["recommendation"]
+        parsed_rec = parse_recommendation(rec_text)
+        
+        if not any(parsed_rec.values()):
+            st.markdown(rec_text, unsafe_allow_html=True)
+        else:
+            col1, col2 = st.columns(2)
+            with col1:
+                render_section_card(parsed_rec["careers"], "Suggested Career Pathways", "🎯")
+                render_section_card(parsed_rec["scholarships"], "Eligible Scholarships", "💰")
+            with col2:
+                render_section_card(parsed_rec["courses"], "Recommended Institutions & Courses", "🎓")
+                render_section_card(parsed_rec["schemes"], "Welfare & Govt Schemes", "🏛️")
+                
+            st.markdown("---")
+            render_section_card(parsed_rec["next_steps"], "Next Steps & Action Points", "🚀")
+
+
+# PAGE 4: Roadmap
+elif page == "🗺️ Roadmap":
+    if not st.session_state.get("loaded_session"):
+        st.info("💡 Please create or select an advisory plan in the **Dashboard** first.")
+    else:
+        session = st.session_state["loaded_session"]
+        st.markdown("### 🗺️ Career & Academic Roadmap")
+        st.markdown("<p style='color: #64748B; margin-top: -10px; margin-bottom: 24px; font-size: 1.05rem;'>What should I focus on now, next, and later?</p>", unsafe_allow_html=True)
+        
+        milestones = []
+        if session.get("milestones_json"):
+            milestones = json.loads(session["milestones_json"])
+        else:
+            milestones = parse_pathway_to_milestones(session["pathway"])
+            if milestones:
+                update_milestones_db(session["id"], milestones)
+                
+        if not milestones:
+            st.warning("Could not parse structured milestones from roadmap. Showing raw text instead:")
+            st.markdown(session["pathway"], unsafe_allow_html=True)
+        else:
+            timeline_html = """
+            <div class="roadmap-timeline" style="margin-left: 10px;">
+            """
+            
+            phase_icons = {
+                "Immediate (0-1 month)": "🟢",
+                "Short-term (1-6 months)": "🔵",
+                "Medium-term (6-18 months)": "🟣",
+                "Long-term (18+ months)": "orange_circle"
+            }
+            
+            phase_classes = {
+                "Immediate (0-1 month)": "immediate",
+                "Short-term (1-6 months)": "short-term",
+                "Medium-term (6-18 months)": "medium-term",
+                "Long-term (18+ months)": "long-term"
+            }
+            
+            for phase in milestones:
+                phase_name = phase["phase"]
+                p_icon = "🟠" if "Long-term" in phase_name else phase_icons.get(phase_name, "🟢")
+                p_class = phase_classes.get(phase_name, "immediate")
+                
+                timeline_html += f"""
+                <div class="timeline-phase-header" style="display: flex; align-items: center; gap: 8px; font-size: 1.25rem; font-weight: 700; color: #1E3A8A; margin-top: 24px; margin-bottom: 16px;">
+                    <span>{p_icon}</span>
+                    <span>{phase_name}</span>
+                </div>
+                <div style="border-left: 2px solid #E2E8F0; margin-left: 14px; padding-left: 20px; position: relative;">
+                """
+                
+                for item in phase["items"]:
+                    action = item.get("action", item.get("text", ""))
+                    why = item.get("why_it_matters", "")
+                    skills = item.get("skills_opportunity", "")
+                    
+                    why_html = f'<p style="margin: 0 0 6px 0; font-size: 0.9rem; color: #475569;"><strong>Why it matters:</strong> {why}</p>' if why else ""
+                    skills_html = f'<div style="background-color: #F1F5F9; color: #1E3A8A; font-weight: 500; font-size: 0.8rem; display: inline-block; padding: 4px 10px; border-radius: 6px; margin-bottom: 8px;">🔑 {skills}</div>' if skills else ""
+                    
+                    meta_html = ""
+                    for cit in item.get("citations", []):
+                        meta_html += f'<span class="cit-tag" style="margin-right: 6px; font-size: 0.72rem;">📄 {cit}</span>'
+                    for link in item.get("linked_resources", []):
+                        meta_html += f'<span class="link-tag" style="font-size: 0.72rem;">🔗 {link}</span>'
+                        
+                    timeline_html += f"""
+                    <div class="timeline-card {p_class}" style="background: white; border: 1px solid #E2E8F0; border-radius: 12px; padding: 18px; margin-bottom: 18px; box-shadow: 0 2px 4px rgba(0,0,0,0.02); position: relative;">
+                        <h4 style="margin: 0 0 8px 0; color: #0F172A; font-size: 1.05rem; font-weight: 600;">{action}</h4>
+                        {why_html}
+                        {skills_html}
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px;">
+                            {meta_html}
+                        </div>
+                    </div>
+                    """
+                timeline_html += "</div>"
+                
+            timeline_html += "</div>"
+            st.markdown(timeline_html, unsafe_allow_html=True)
+
+
+# PAGE 5: Schedule
+elif page == "📅 Academic Schedule":
+    if not st.session_state.get("loaded_session"):
+        st.info("💡 Please create or select an advisory plan in the **Dashboard** first.")
+    else:
+        session = st.session_state["loaded_session"]
+        st.markdown(f"### 📅 Academic Schedule & Gantt View")
+        st.markdown("<p style='color: #64748B; margin-top: -10px; margin-bottom: 24px; font-size: 1.05rem;'>When should I do it?</p>", unsafe_allow_html=True)
+        
+        if not session.get("schedule"):
+            st.markdown("#### Plan dates for your milestones")
+            target_date = st.date_input("When is your target goal date (e.g. college admission)?", value=date(2027, 8, 15))
+            
+            if st.button("📅 Generate My Monthly Schedule", type="primary", use_container_width=True):
+                with st.spinner("Assigning deadlines..."):
+                    try:
+                        resp = requests.post(
+                            f"{API_BASE}/schedule",
+                            json={"pathway": session["pathway"], "target_date": target_date.isoformat()},
+                            timeout=90,
+                        )
+                        resp.raise_for_status()
+                        schedule_text = resp.json()["schedule"]
+                        
+                        schedule_items = parse_schedule_table(schedule_text)
+                        
+                        conn = db.sqlite3.connect(db.DB_PATH)
+                        cur = conn.cursor()
+                        cur.execute(
+                            "UPDATE sessions SET schedule = ?, schedule_json = ? WHERE id = ?",
+                            (schedule_text, json.dumps(schedule_items), session["id"])
+                        )
+                        conn.commit()
+                        conn.close()
+                        
+                        st.session_state["loaded_session"] = db.get_session(session["id"])
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to generate schedule: {e}")
+        else:
+            schedule_items = []
+            if session.get("schedule_json"):
+                schedule_items = json.loads(session["schedule_json"])
+            else:
+                schedule_items = parse_schedule_table(session["schedule"])
+                if schedule_items:
+                    update_schedule_db(session["id"], schedule_items)
+                    
+            if not schedule_items:
+                st.warning("Could not parse schedule into structured calendar. Showing raw schedule details:")
+                # Strip raw markdown table markup to avoid rendering a table
+                clean_lines = []
+                for line in session["schedule"].split("\n"):
+                    if "|" in line and "Month" not in line and "---" not in line:
+                        parts = [p.strip() for p in line.split("|")[1:-1]]
+                        if len(parts) >= 2:
+                            clean_lines.append(f"- **{parts[0]}**: {parts[1]}")
+                if clean_lines:
+                    st.markdown("\n".join(clean_lines))
+                else:
+                    st.markdown(session["schedule"])
+            else:
+                # Gantt View
+                st.markdown("📊 Gantt Timeline Chart")
+                gantt_html = render_gantt_chart(schedule_items)
+                if gantt_html:
+                    st.components.v1.html(gantt_html, height=500, scrolling=False)
+                
+                # Calendar month blocks
+                st.markdown("📅 Monthly Schedule Cards")
+                
+                # Group items by month
+                grouped = {}
+                for item in schedule_items:
+                    m = item["month"]
+                    if m not in grouped:
+                        grouped[m] = []
+                    grouped[m].append(item)
+                    
+                for m, items in grouped.items():
+                    st.markdown(f"#### 📅 {m}")
+                    
+                    for item in items:
+                        # Find index
+                        idx = next(i for i, x in enumerate(schedule_items) if x["id"] == item["id"])
+                        cb_key = f"cb_sched_{session['id']}_{item['id']}"
+                        
+                        # Priority emoji
+                        p_emoji = "🔴" if item["priority"].lower() == "high" else "🟡" if item["priority"].lower() == "medium" else "🟢"
+                        
+                        checked = st.checkbox(
+                            f"{p_emoji} {item['action']}",
+                            value=item["completed"],
+                            key=cb_key
+                        )
+                        
+                        if checked != item["completed"]:
+                            schedule_items[idx]["completed"] = checked
+                            update_schedule_db(session["id"], schedule_items)
+                            st.rerun()
+                            
+                        # Meta tags below checkbox
+                        meta_html = ""
+                        for cit in item.get("citations", []):
+                            meta_html += f'<span class="cit-tag">📄 {cit}</span>'
+                        for link in item.get("linked_resources", []):
+                            meta_html += f'<span class="link-tag">🏫 {link}</span>'
+                            
+                        if meta_html:
+                            st.markdown(f'<div class="checkbox-meta">{meta_html}</div>', unsafe_allow_html=True)
+
+
+# PAGE 6: Standalone Q&A
+elif page == "❓ Quick Q&A":
+    st.markdown("### ❓ Quick Q&A Portal")
+    st.markdown("Ask any quick institutional question about colleges, eligibility, scholarships, or schemes. The Q&A Agent uses a direct RAG retrieval search.")
+    
+    question = st.text_input("Type your question here:", placeholder="e.g. 'What is the Pragati Scholarship benefit amount?'")
+    category = st.selectbox("Filter search category (optional):", ["Any", "career", "course", "scholarship", "scheme"])
+    
+    if st.button("🔍 Search & Answer", type="primary", use_container_width=True):
+        if not question.strip():
+            st.warning("Please enter a question.")
+        else:
+            with st.spinner("Retrieving sources and formulating answer..."):
+                try:
+                    payload = {"question": question}
+                    if category != "Any":
+                        payload["category"] = category
+                        
+                    resp = requests.post(f"{API_BASE}/qa", json=payload, timeout=60)
+                    resp.raise_for_status()
+                    
+                    st.markdown("#### 💡 Answer")
+                    answer_text = resp.json()["answer"]
+                    
+                    # Clean and cite nicely
+                    citations = re.findall(r"\((?:source|citation):\s*([^)]+)\)", answer_text, re.IGNORECASE)
+                    clean_answer = re.sub(r"\((?:source|citation):\s*[^)]+\)", "", answer_text, re.IGNORECASE).strip()
+                    
+                    with st.container(border=True):
+                        # Clean up malformed markdown formatting
+                        clean_answer_formatted = clean_answer.replace("### **", "### ").replace("\\*\\*", "**")
+                        st.markdown(clean_answer_formatted, unsafe_allow_html=True)
+                        if citations:
+                            st.markdown("---")
+                            st.markdown("**Grounded Citations:**")
+                            cit_html = ""
+                            for c in set(citations): # dedupe
+                                cit_html += f'<span class="cit-tag" style="margin-right: 8px;">📄 {c}</span>'
+                            st.markdown(cit_html, unsafe_allow_html=True)
+                            
+                except Exception as e:
+                    st.error(f"Failed to query Q&A Agent: {e}")
+
+
+# PAGE 7: Past Sessions
+elif page == "📚 Past Sessions":
+    st.markdown("### 📚 Your Past Session Archives")
+    st.markdown("Revisit and load previous advisory assessments. Your records are saved in the local database.")
+    
+    sessions = db.get_all_sessions(st.session_state["username"])
+    if not sessions:
+        st.info("No past sessions found. Head over to **Dashboard** to create your first career advisory plan!")
+    else:
+        for s in sessions:
+            with st.container(border=True):
+                col_info, col_btn = st.columns([5, 1])
+                with col_info:
+                    st.markdown(f"**📅 Date:** {s['created_at'][:16]}")
+                    preview = s['student_text'][:120] + ("..." if len(s['student_text']) > 120 else "")
+                    st.markdown(f"*{preview}*")
+                with col_btn:
+                    if st.button("📂 Load Session", key=f"load_arch_{s['id']}"):
+                        st.session_state["loaded_session"] = db.get_session(s["id"])
+                        st.rerun()

@@ -1,0 +1,52 @@
+[
+    {
+        "question": "scholarships for engineering students",
+        "category": "scholarship",
+        "expected_source": "indian_govt_scholarships.csv"
+    },
+    {
+        "question": "scholarships for college students",
+        "category": "scholarship",
+        "expected_source": "indian_govt_scholarships.csv"
+    },
+    {
+        "question": "AICTE scholarships for students",
+        "category": "scholarship",
+        "expected_source": "indian_govt_scholarships.csv"
+    },
+    {
+        "question": "government scholarships for undergraduate students",
+        "category": "scholarship",
+        "expected_source": "indian_govt_scholarships.csv"
+    },
+    {
+        "question": "scholarship eligibility for engineering students",
+        "category": "scholarship",
+        "expected_source": "indian_govt_scholarships.csv"
+    },
+    {
+        "question": "Pudhumai Penn scheme for girl students",
+        "category": "scheme",
+        "expected_source": "central_and_state_schemes.csv"
+    },
+    {
+        "question": "Tamil Pudhalvan scheme for government school boys",
+        "category": "scheme",
+        "expected_source": "central_and_state_schemes.csv"
+    },
+    {
+        "question": "NIRF ranking top engineering colleges",
+        "category": "course",
+        "expected_source": "NIRF Ranking 2025.csv"
+    },
+    {
+        "question": "IIT Madras courses fees hostel availability",
+        "category": "course",
+        "expected_source": "national_colleges_and_fees.csv"
+    },
+    {
+        "question": "software engineer python developer jobs",
+        "category": "career",
+        "expected_source": "job_dataset.csv"
+    }
+]

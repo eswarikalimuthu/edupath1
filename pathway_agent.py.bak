@@ -1,0 +1,898 @@
+"""
+CareerCompass - Pathway Planning Agent
+
+Responsibilities:
+1. Generate a personalized education/career roadmap.
+2. Prefer Gemini when available.
+3. Fall back to local Ollama when Gemini is unavailable.
+4. Fall back to deterministic rule-based planning if both LLMs fail.
+5. Never crash the complete multi-agent pipeline because of an LLM outage.
+"""
+
+import time
+import requests
+
+from google import genai
+from src import config
+
+
+# ============================================================
+# PATHWAY PROMPT
+# ============================================================
+
+PATHWAY_PROMPT = """
+You are the Pathway Planning Agent of CareerCompass,
+an AI-powered personalized career and educational adviser.
+
+Your task is to create a practical, realistic and personalized
+career roadmap based ONLY on the student's profile and retrieved
+career/education information.
+
+STUDENT PROFILE:
+{profile}
+
+RETRIEVED INFORMATION:
+{context}
+
+IMPORTANT RULES:
+
+1. Personalize the roadmap according to:
+   - Current education level
+   - Current year/class
+   - Stream
+   - Interests
+   - Academic performance
+   - State
+   - Financial constraints
+   - Career goal
+
+2. Do NOT recommend repeating an education level unnecessarily.
+
+3. If the student is already an undergraduate student:
+   - Do NOT recommend another undergraduate degree as the immediate next step.
+   - Focus on skills, internships, certifications, competitive exams,
+     projects, higher studies or employment depending on the profile.
+
+4. If the student is in 12th standard:
+   - Explain suitable undergraduate pathways.
+   - Include entrance examinations where relevant.
+   - Include affordable/public college options when possible.
+
+5. Consider financial constraints.
+   Prefer scholarships, government schemes, public institutions,
+   affordable courses and free/low-cost learning resources.
+
+6. Do not invent scholarships, colleges, entrance exams or government
+   schemes that are not supported by the retrieved information.
+
+7. The roadmap must be actionable and sequential.
+
+8. Mention approximate time periods such as:
+   - Immediately
+   - Next 3 months
+   - Next 6 months
+   - 1 year
+   - Long term
+
+9. Explain WHY each major step is recommended.
+
+10. Keep the answer concise enough to be useful in an application UI.
+
+OUTPUT FORMAT:
+
+CAREER GOAL
+<recommended goal>
+
+WHY THIS PATH
+<short explanation>
+
+PHASE 1 - CURRENT STAGE
+Duration:
+Actions:
+Skills:
+Exams / Certifications:
+
+PHASE 2 - NEXT STEP
+Duration:
+Actions:
+Skills:
+Exams / Certifications:
+
+PHASE 3 - HIGHER EDUCATION / CAREER ENTRY
+Duration:
+Actions:
+Skills:
+Exams / Certifications:
+
+PHASE 4 - LONG TERM
+Duration:
+Actions:
+Possible Roles:
+
+IMPORTANT MILESTONES
+- milestone 1
+- milestone 2
+- milestone 3
+
+FINAL ADVICE
+<short personalized advice>
+"""
+
+
+# ============================================================
+# TEMPORARY ERROR DETECTION
+# ============================================================
+
+def _is_temporary_error(error):
+    """
+    Detect errors where retrying another LLM/fallback is appropriate.
+    """
+
+    message = str(error).lower()
+
+    temporary_keywords = [
+        "503",
+        "unavailable",
+        "high demand",
+        "429",
+        "rate limit",
+        "resource exhausted",
+        "timeout",
+        "timed out",
+        "deadline exceeded",
+        "overloaded",
+        "internal server error",
+        "connection reset",
+    ]
+
+    return any(keyword in message for keyword in temporary_keywords)
+
+
+# ============================================================
+# GEMINI
+# ============================================================
+
+def _call_gemini(prompt):
+    """
+    Try Gemini up to 3 times.
+
+    Returns:
+        str | None
+    """
+
+    api_key = getattr(config, "GEMINI_API_KEY", "")
+
+    if not api_key:
+        print("Gemini API key not configured.")
+        return None
+
+    try:
+        client = genai.Client(api_key=api_key)
+
+        for attempt in range(1, 4):
+
+            try:
+                print(
+                    f"Pathway Agent - Gemini attempt "
+                    f"{attempt}/3..."
+                )
+
+                response = client.models.generate_content(
+                    model=config.GEMINI_MODEL,
+                    contents=prompt,
+                )
+
+                text = getattr(response, "text", None)
+
+                if text and text.strip():
+                    print("Pathway Agent - Gemini succeeded.")
+                    return text.strip()
+
+                print("Gemini returned an empty response.")
+
+            except Exception as error:
+
+                print(
+                    f"Gemini attempt {attempt} failed: "
+                    f"{error}"
+                )
+
+                if attempt < 3:
+
+                    wait_time = 2 * attempt
+
+                    if _is_temporary_error(error):
+                        print(
+                            f"Temporary Gemini error. "
+                            f"Retrying in {wait_time} seconds..."
+                        )
+                    else:
+                        print(
+                            f"Retrying in {wait_time} seconds..."
+                        )
+
+                    time.sleep(wait_time)
+
+        print(
+            "Gemini failed after all retry attempts."
+        )
+
+    except Exception as error:
+
+        print(
+            f"Could not initialize Gemini: {error}"
+        )
+
+    return None
+
+
+# ============================================================
+# OLLAMA
+# ============================================================
+
+def _call_ollama(prompt):
+    """
+    Use local Ollama as the second-level fallback.
+
+    Expected endpoint:
+        http://localhost:11434/api/generate
+
+    Returns:
+        str | None
+    """
+
+    ollama_url = getattr(
+        config,
+        "OLLAMA_URL",
+        "http://localhost:11434/api/generate",
+    )
+
+    ollama_model = getattr(
+        config,
+        "OLLAMA_MODEL",
+        "llama3.2:latest",
+    )
+
+    payload = {
+        "model": ollama_model,
+        "prompt": prompt,
+        "stream": False,
+        "options": {
+            "temperature": 0.2
+        }
+    }
+
+    try:
+
+        print(
+            f"Pathway Agent - Trying Ollama "
+            f"({ollama_model})..."
+        )
+
+        response = requests.post(
+            ollama_url,
+            json=payload,
+            timeout=120,
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        text = data.get("response", "")
+
+        if text and text.strip():
+
+            print(
+                "Pathway Agent - Ollama succeeded."
+            )
+
+            return text.strip()
+
+        print(
+            "Ollama returned an empty response."
+        )
+
+    except requests.exceptions.ConnectionError:
+
+        print(
+            "Ollama is not running or is unreachable."
+        )
+
+    except requests.exceptions.Timeout:
+
+        print(
+            "Ollama request timed out."
+        )
+
+    except Exception as error:
+
+        print(
+            f"Ollama failed: {error}"
+        )
+
+    return None
+
+
+# ============================================================
+# RULE-BASED FALLBACK
+# ============================================================
+
+def _rule_based_pathway(profile, context):
+    """
+    Deterministic fallback.
+
+    This guarantees that the application can still provide
+    a useful roadmap even when Gemini and Ollama are unavailable.
+    """
+
+    stream = str(
+        profile.get("stream", "unknown")
+    ).lower()
+
+    education_stage = str(
+        profile.get("education_stage", "unknown")
+    ).lower()
+
+    current_year = str(
+        profile.get("current_year", "")
+    )
+
+    interests = profile.get(
+        "interests",
+        []
+    )
+
+    if isinstance(interests, list):
+        interests_text = ", ".join(
+            str(item) for item in interests
+        )
+    else:
+        interests_text = str(interests)
+
+    constraints = profile.get(
+        "constraints",
+        "None specified",
+    )
+
+    # --------------------------------------------------------
+    # Determine career direction
+    # --------------------------------------------------------
+
+    if "engineering" in stream:
+
+        if (
+            "computer" in interests_text.lower()
+            or "software" in interests_text.lower()
+            or "technology" in interests_text.lower()
+        ):
+            career_goal = (
+                "Build a career in software development, "
+                "AI/ML, data, cybersecurity or related technology fields."
+            )
+
+        elif "robot" in interests_text.lower():
+            career_goal = (
+                "Build a career in robotics, automation "
+                "and intelligent systems."
+            )
+
+        else:
+            career_goal = (
+                "Build a technology/engineering career "
+                "aligned with the student's interests."
+            )
+
+    elif "medical" in stream:
+
+        career_goal = (
+            "Build a healthcare career through an appropriate "
+            "medical, allied-health or life-science pathway."
+        )
+
+    elif "commerce" in stream:
+
+        career_goal = (
+            "Build a career in finance, accounting, business "
+            "analytics, banking or management."
+        )
+
+    elif "law" in stream:
+
+        career_goal = (
+            "Build a professional career in law, legal services "
+            "or a specialized legal domain."
+        )
+
+    elif (
+        "arts" in stream
+        or "humanities" in stream
+    ):
+
+        career_goal = (
+            "Build a career aligned with humanities, social sciences, "
+            "communication, public service or related fields."
+        )
+
+    elif "science" in stream:
+
+        career_goal = (
+            "Build a science, research, data or technology-oriented career."
+        )
+
+    else:
+
+        career_goal = (
+            "Explore suitable career pathways based on academic "
+            "performance, interests and skills."
+        )
+
+    # --------------------------------------------------------
+    # Education stage
+    # --------------------------------------------------------
+
+    if (
+        "school" in education_stage
+        or "12" in current_year
+        or "higher secondary" in education_stage
+    ):
+
+        phase_1 = """
+Duration: Current academic year
+
+Actions:
+- Complete the current school curriculum strongly.
+- Identify 2-3 realistic career options.
+- Research relevant entrance examinations.
+- Start preparing for required entrance examinations.
+- Identify government scholarships and affordable institutions.
+
+Skills:
+- Communication
+- Problem solving
+- Digital literacy
+- Basic domain skills
+
+Exams / Certifications:
+- Check the entrance examinations relevant to the selected degree.
+"""
+
+        phase_2 = """
+Duration: Next 6-12 months
+
+Actions:
+- Apply for appropriate undergraduate programmes.
+- Compare public/government and affordable institutions.
+- Apply for eligible scholarships.
+- Build basic skills related to the chosen career.
+
+Skills:
+- Programming/domain fundamentals
+- Communication
+- Aptitude
+- Academic research
+"""
+
+        phase_3 = """
+Duration: Undergraduate years
+
+Actions:
+- Maintain strong academic performance.
+- Complete projects every academic year.
+- Participate in internships, hackathons and competitions.
+- Build a portfolio.
+- Apply for scholarships and internships.
+
+Skills:
+- Technical/domain expertise
+- Problem solving
+- Communication
+- Teamwork
+"""
+
+        phase_4 = """
+Duration: Final year and beyond
+
+Actions:
+- Prepare for placements or higher studies.
+- Build a strong resume and portfolio.
+- Complete internships.
+- Prepare for relevant competitive examinations if required.
+
+Possible Roles:
+- Entry-level professional roles
+- Graduate trainee roles
+- Research/higher-study pathways
+"""
+
+    elif (
+        "undergraduate" in education_stage
+        or "college" in education_stage
+        or "bachelor" in education_stage
+    ):
+
+        phase_1 = f"""
+Duration: Next 3 months
+
+Actions:
+- Strengthen core skills related to {career_goal}.
+- Identify missing technical/domain skills.
+- Begin one practical project.
+- Create or improve a professional portfolio.
+- Search for relevant internships.
+
+Skills:
+- Core domain knowledge
+- Communication
+- Problem solving
+- Digital/professional skills
+"""
+
+        phase_2 = """
+Duration: Next 6 months
+
+Actions:
+- Complete 2-3 portfolio projects.
+- Apply for internships.
+- Participate in hackathons/competitions.
+- Complete relevant low-cost or free certifications.
+- Build a professional resume.
+
+Skills:
+- Advanced domain skills
+- Project development
+- Presentation
+- Team collaboration
+"""
+
+        phase_3 = """
+Duration: Next 1 year
+
+Actions:
+- Obtain internship or practical experience.
+- Prepare for placements.
+- Explore postgraduate options if they improve career prospects.
+- Prepare for relevant competitive examinations when applicable.
+
+Skills:
+- Industry-ready skills
+- Interview preparation
+- Problem solving
+- Professional communication
+"""
+
+        phase_4 = """
+Duration: 1-3 years
+
+Actions:
+- Enter the target profession or pursue a suitable higher degree.
+- Continue specialization.
+- Build professional experience.
+- Keep updating technical/domain knowledge.
+
+Possible Roles:
+- Entry-level professional
+- Analyst
+- Developer
+- Researcher
+- Specialist
+"""
+
+    else:
+
+        phase_1 = """
+Duration: Next 3 months
+
+Actions:
+- Clarify the preferred career direction.
+- Assess current academic and technical skills.
+- Identify skill gaps.
+- Start structured learning.
+
+Skills:
+- Communication
+- Digital literacy
+- Problem solving
+"""
+
+        phase_2 = """
+Duration: Next 6 months
+
+Actions:
+- Complete relevant courses.
+- Work on practical projects.
+- Explore internships and career opportunities.
+- Research suitable higher-education options.
+
+Skills:
+- Domain fundamentals
+- Practical skills
+- Professional communication
+"""
+
+        phase_3 = """
+Duration: Next 1 year
+
+Actions:
+- Build a strong portfolio.
+- Gain practical experience.
+- Apply for suitable jobs, internships or higher studies.
+
+Skills:
+- Advanced domain skills
+- Interview skills
+- Professional skills
+"""
+
+        phase_4 = """
+Duration: Long term
+
+Actions:
+- Specialize in the selected domain.
+- Continue professional development.
+- Reassess the career plan annually.
+
+Possible Roles:
+- Professional roles aligned with the selected career.
+"""
+
+    # --------------------------------------------------------
+    # Important milestones
+    # --------------------------------------------------------
+
+    milestones = f"""
+IMPORTANT MILESTONES
+
+- Finalize a realistic career direction.
+- Build skills aligned with {career_goal}.
+- Complete practical projects.
+- Gain internship/work experience.
+- Track scholarships and affordable education options.
+- Prepare for relevant entrance/competitive examinations.
+- Review and update the career roadmap regularly.
+"""
+
+    # --------------------------------------------------------
+    # Financial constraints
+    # --------------------------------------------------------
+
+    if (
+        constraints
+        and str(constraints).lower()
+        not in ["none", "none specified", "unknown"]
+    ):
+
+        financial_advice = """
+FINAL ADVICE
+
+Because financial constraints are present, prioritize:
+- Government/public institutions
+- Scholarships
+- Government education schemes
+- Low-cost certifications
+- Free online learning resources
+- Internships and skill-building opportunities
+
+Avoid making expensive private education the default recommendation.
+"""
+
+    else:
+
+        financial_advice = """
+FINAL ADVICE
+
+Focus on building strong academic performance,
+practical skills, projects and relevant experience.
+Review your pathway periodically as your interests develop.
+"""
+
+    return f"""
+CAREER GOAL
+
+{career_goal}
+
+WHY THIS PATH
+
+This pathway is based on the student's current education stage,
+stream, interests and stated career objectives.
+
+PHASE 1 - CURRENT STAGE
+
+{phase_1}
+
+PHASE 2 - NEXT STEP
+
+{phase_2}
+
+PHASE 3 - HIGHER EDUCATION / CAREER ENTRY
+
+{phase_3}
+
+PHASE 4 - LONG TERM
+
+{phase_4}
+
+{milestones}
+
+{financial_advice}
+""".strip()
+
+
+# ============================================================
+# MAIN PATHWAY FUNCTION
+# ============================================================
+
+def generate_pathway(profile, context):
+    """
+    Generate a personalized pathway.
+
+    Priority:
+
+        1. Gemini
+        2. Ollama
+        3. Rule-based fallback
+
+    The function never intentionally crashes because of an
+    unavailable LLM.
+    """
+
+    prompt = PATHWAY_PROMPT.format(
+        profile=profile,
+        context=context,
+    )
+
+    # --------------------------------------------------------
+    # LEVEL 1: GEMINI
+    # --------------------------------------------------------
+
+    gemini_result = _call_gemini(prompt)
+
+    if gemini_result:
+        return gemini_result
+
+    print(
+        "\nGemini unavailable."
+        "\nSwitching to local Ollama...\n"
+    )
+
+    # --------------------------------------------------------
+    # LEVEL 2: OLLAMA
+    # --------------------------------------------------------
+
+    ollama_result = _call_ollama(prompt)
+
+    if ollama_result:
+        return ollama_result
+
+    print(
+        "\nOllama unavailable."
+        "\nSwitching to rule-based pathway generation...\n"
+    )
+
+    # --------------------------------------------------------
+    # LEVEL 3: RULE-BASED
+    # --------------------------------------------------------
+
+    return _rule_based_pathway(
+        profile,
+        context,
+    )
+
+
+# ============================================================
+# GRAPH-COMPATIBLE FUNCTION
+# ============================================================
+
+def run_pathway(state):
+    """
+    LangGraph-compatible pathway node.
+
+    Expected state structure:
+
+        {
+            "profile": {...},
+            "retrieval": {...}
+        }
+
+    Returns:
+        {
+            "pathway": "..."
+        }
+    """
+
+    profile = state.get(
+        "profile",
+        {},
+    )
+
+    retrieval = state.get(
+        "retrieval",
+        {},
+    )
+
+    # Retrieval agent may return either a string or
+    # a structured dictionary.
+
+    if isinstance(retrieval, dict):
+
+        context = retrieval.get(
+            "context",
+            retrieval,
+        )
+
+    else:
+
+        context = retrieval
+
+    pathway = generate_pathway(
+        profile,
+        context,
+    )
+
+    return {
+        "pathway": pathway
+    }
+
+
+# ============================================================
+# STANDALONE TEST
+# ============================================================
+
+if __name__ == "__main__":
+
+    test_profile = {
+        "stream": "engineering",
+        "education_stage": "school",
+        "current_year": "12th standard",
+        "state": "Tamil Nadu",
+        "category": "unknown",
+        "board_percentage": 88,
+        "interests": [
+            "computer science",
+            "robotics",
+        ],
+        "constraints": (
+            "financial constraints regarding "
+            "expensive private colleges"
+        ),
+        "goal": (
+            "scholarship options and career advice"
+        ),
+    }
+
+    test_context = """
+    Career:
+    AI ML Engineer
+    Education: B.Tech / relevant undergraduate degree
+    Skills: Python, machine learning, mathematics
+
+    Career:
+    Robotics Engineer
+    Education: Engineering degree
+    Skills: robotics, programming, electronics
+
+    Scholarship:
+    Government scholarship opportunities for eligible students.
+
+    Scheme:
+    Tamil Nadu student education support schemes.
+    """
+
+    print("\n" + "=" * 70)
+    print("PATHWAY AGENT TEST")
+    print("=" * 70)
+
+    result = generate_pathway(
+        test_profile,
+        test_context,
+    )
+
+    print("\n" + "=" * 70)
+    print("GENERATED PATHWAY")
+    print("=" * 70)
+
+    print(result)
+
+    print("\n" + "=" * 70)
+    print("TEST COMPLETED")
+    print("=" * 70)

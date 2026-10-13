@@ -1,0 +1,104 @@
+"""
+Module 3/4 - FastAPI backend.
+
+Exposes the multi-agent pipeline as HTTP endpoints so the Streamlit
+frontend (or anything else) can call it over the network instead of
+running graph.py as a script each time.
+
+Run with:
+    uvicorn api:app --reload --port 8000
+
+Then visit http://127.0.0.1:8000/docs for interactive API docs (auto-generated).
+"""
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+from src import graph
+from src.agents import qa_agent, schedule_agent
+
+app = FastAPI(
+    title="CareerCompass AI API",
+    description="Multi-agent RAG-based career & education advisor for Tamil Nadu students",
+    version="0.2.0",
+)
+
+
+class AdviseRequest(BaseModel):
+    student_text: str
+
+
+class AdviseResponse(BaseModel):
+    profile: dict
+    recommendation: str
+    pathway: str
+
+
+class QARequest(BaseModel):
+    question: str
+    category: str | None = None  # optional: "career" | "course" | "scholarship" | "scheme"
+
+
+class QAResponse(BaseModel):
+    answer: str
+
+
+class ScheduleRequest(BaseModel):
+    pathway: str
+    target_date: str  # ISO format, e.g. "2027-08-15"
+
+
+class ScheduleResponse(BaseModel):
+    schedule: str
+
+
+@app.get("/")
+def health_check():
+    """Simple endpoint to confirm the API is running."""
+    return {"status": "ok", "service": "CareerCompass AI"}
+
+
+@app.post("/advise", response_model=AdviseResponse)
+def advise(request: AdviseRequest):
+    """
+    Runs the full pipeline: Profile -> Retrieval -> Recommendation -> Pathway.
+    This is the main endpoint the frontend calls when a student submits
+    their background/interests for full advisory.
+    """
+    try:
+        result = graph.run_advisor(request.student_text)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return AdviseResponse(
+        profile=result["profile"],
+        recommendation=result["recommendation"],
+        pathway=result["pathway"],
+    )
+
+
+@app.post("/qa", response_model=QAResponse)
+def qa(request: QARequest):
+    """
+    Standalone Q&A endpoint - for quick questions that don't need full
+    profiling, e.g. "What's the income limit for PRAGATI scholarship?"
+    """
+    try:
+        answer = qa_agent.answer_question(request.question, category=request.category)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return QAResponse(answer=answer)
+
+
+@app.post("/schedule", response_model=ScheduleResponse)
+def schedule(request: ScheduleRequest):
+    """
+    Converts an already-generated pathway roadmap into a concrete,
+    dated month-by-month schedule based on the student's target goal date.
+    """
+    try:
+        result = schedule_agent.generate_schedule(request.pathway, request.target_date)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return ScheduleResponse(schedule=result)
